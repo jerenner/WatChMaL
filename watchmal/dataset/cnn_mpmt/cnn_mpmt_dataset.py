@@ -61,7 +61,7 @@ class CNNmPMTDataset(H5Dataset):
         ################
 
 
-    def process_data(self, hit_pmts, hit_data):
+    def process_data(self, hit_pmts, hit_data, retrieve=False):
         """
         Returns event data from dataset associated with a specific index
         Args:
@@ -88,7 +88,6 @@ class CNNmPMTDataset(H5Dataset):
         # collapse arrays if desired
         # if self.collapse_arrays:
         #     data = np.expand_dims(np.sum(data, 0), 0)
-        
         return data
 
     def  __getitem__(self, item):
@@ -307,5 +306,4 @@ class CNNmPMTDataset(H5Dataset):
         """
         standarized_array = (hit_array - mu)/std
         return standarized_array
-
 
