@@ -328,7 +328,6 @@ class ClassifierEngine(BaseEngine):
                 softmaxes   = global_eval_results_dict["softmaxes"].cpu()
 
         if self.rank == 0:
-
             # Save overall evaluation results
             print("Saving Data...")
             np.save(self.dirpath + "indices.npy", indices)
