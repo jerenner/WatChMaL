@@ -12,9 +12,8 @@ from time import strftime, localtime, time
 # WatChMaL imports
 from watchmal.engine.engine_base import BaseEngine
 
-
-class ClassifierEngine(BaseEngine):
-    def __init__(self, model, rank, gpu, dump_path):
+class ClassifierEngine:
+    def __init__(self, model, rank, gpu, dump_path, label_set):
         """
         Args:
             model       ... model object that engine will use in training or evaluation
@@ -25,8 +24,92 @@ class ClassifierEngine(BaseEngine):
         # create the directory for saving the log and dump files
         super().__init__(model, rank, gpu, dump_path)
 
-        self.criterion = torch.nn.CrossEntropyLoss()
-        self.softmax = torch.nn.Softmax(dim=1)
+        # Setup the parameters to save given the model type
+        if isinstance(self.model, DDP):
+            self.is_distributed = True
+            self.model_accs = self.model.module
+            self.ngpus = torch.distributed.get_world_size()
+        else:
+            self.is_distributed = False
+            self.model_accs = self.model
+
+        self.data_loaders = {}
+        self.label_set = label_set
+
+        # define the placeholder attributes
+        self.data = None
+        self.labels = None
+        self.loss = None
+
+        # logging attributes
+        self.train_log = CSVData(self.dirpath + "log_train_{}.csv".format(self.rank))
+
+        if self.rank == 0:
+            self.val_log = CSVData(self.dirpath + "log_val.csv")
+
+        self.criterion = nn.CrossEntropyLoss()
+        self.softmax = nn.Softmax(dim=1)
+        
+        self.optimizer = None
+        self.scheduler = None
+    
+    def configure_optimizers(self, optimizer_config):
+        """
+        Set up optimizers from optimizer config
+
+        Args:
+            optimizer_config    ... hydra config specifying optimizer object
+        """
+        self.optimizer = instantiate(optimizer_config, params=self.model_accs.parameters())
+
+  
+    def configure_scheduler(self, scheduler_config):
+        """
+        Set up scheduler from scheduler config
+
+        Args:
+            scheduler_config    ... hydra config specifying scheduler object
+        """
+        self.scheduler = instantiate(scheduler_config, optimizer=self.optimizer)
+        print('Successfully set up Scheduler')
+
+
+    def configure_data_loaders(self, data_config, loaders_config, is_distributed, seed):
+        """
+        Set up data loaders from loaders config
+
+        Args:
+            data_config     ... hydra config specifying dataset
+            loaders_config  ... hydra config specifying dataloaders
+            is_distributed  ... boolean indicating if running in multiprocessing mode
+            seed            ... seed to use to initialize dataloaders
+        
+        Parameters:
+            self should have dict attribute data_loaders
+        """
+        for name, loader_config in loaders_config.items():
+            self.data_loaders[name] = get_data_loader(**data_config, **loader_config, is_distributed=is_distributed, seed=seed)
+            if self.label_set is not None:
+                self.data_loaders[name].map_labels(self.label_set)
+    
+    def get_synchronized_metrics(self, metric_dict):
+        """
+        Gathers metrics from multiple processes using pytorch distributed operations
+
+        Args:
+            metric_dict         ... dict containing values that are tensor outputs of a single process
+        
+        Returns:
+            global_metric_dict  ... dict containing concatenated list of tensor values gathered from all processes
+        """
+        global_metric_dict = {}
+        for name, array in zip(metric_dict.keys(), metric_dict.values()):
+            tensor = torch.as_tensor(array).to(self.device)
+            global_tensor = [torch.zeros_like(tensor).to(self.device) for i in range(self.ngpus)]
+            torch.distributed.all_gather(global_tensor, tensor)
+            global_metric_dict[name] = torch.cat(global_tensor)
+        
+        return global_metric_dict
 
     def forward(self, train=True):
         """
