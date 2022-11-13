@@ -23,7 +23,7 @@ from watchmal.utils.logging_utils import get_git_version
 
 logger = logging.getLogger('train')
 
-@hydra.main(config_path='config/', config_name='reg_train')
+@hydra.main(config_path='config/', config_name='gnn_train')
 def main(config):
     """
     Run model using given config, spawn worker subprocesses as necessary
@@ -31,12 +31,12 @@ def main(config):
     Args:
         config  ... hydra config specified in the @hydra.main annotation
     """
-    logger.info(f"Using the following git version of WatChMaL repository: {get_git_version(os.path.dirname(__file__))}")
-    logger.info(f"Running with the following config:\n{OmegaConf.to_yaml(config)}")
+    logger.info(
+        f"Running with the following config:\n{OmegaConf.to_yaml(config)}")
 
     ngpus = len(config.gpu_list)
     is_distributed = ngpus > 1
-    
+
     # Initialize process group env variables
     if is_distributed:
         os.environ['MASTER_ADDR'] = 'localhost'
@@ -45,7 +45,7 @@ def main(config):
             master_port = config.MASTER_PORT
         else:
             master_port = 12355
-            
+
         # Automatically select port based on base gpu
         master_port += config.gpu_list[0]
         os.environ['MASTER_PORT'] = str(master_port)
@@ -56,22 +56,24 @@ def main(config):
     except:
         print("Creating a directory for run dump at : {}".format(config.dump_path))
         os.makedirs(config.dump_path)
-    
+
     print("Dump path: {}".format(config.dump_path))
 
     # initialize seed
     if config.seed is None:
         # numpy call needed to fix pytorch issue that was patched in August 2020
-        config.seed = np.random.randint(100000) #np.random.seed(torch.seed())
-    
+        config.seed = np.random.randint(100000)  # np.random.seed(torch.seed())
+
     if is_distributed:
         print("Using multiprocessing...")
         devids = ["cuda:{0}".format(x) for x in config.gpu_list]
         print("Using DistributedDataParallel on these devices: {}".format(devids))
-        mp.spawn(main_worker_function, nprocs=ngpus, args=(ngpus, is_distributed, config))
+        mp.spawn(main_worker_function, nprocs=ngpus,
+                 args=(ngpus, is_distributed, config))
     else:
         print("Only one gpu found, not using multiprocessing...")
         main_worker_function(0, ngpus, is_distributed, config)
+
 
 def main_worker_function(rank, ngpus_per_node, is_distributed, config):
     """
@@ -91,7 +93,7 @@ def main_worker_function(rank, ngpus_per_node, is_distributed, config):
     torch.cuda.set_device(gpu)
 
     world_size = ngpus_per_node
-    
+
     if is_distributed:
         torch.distributed.init_process_group(
             'nccl',
@@ -110,13 +112,15 @@ def main_worker_function(rank, ngpus_per_node, is_distributed, config):
         model = DDP(model, device_ids=[gpu])
 
     # Instantiate the engine
-    engine = instantiate(config.engine, model=model, rank=rank, gpu=gpu, dump_path=config.dump_path)
-    
+    engine = instantiate(config.engine, model=model,
+                         rank=rank, gpu=gpu, dump_path=config.dump_path)
+
     # Configure data loaders
     for task, task_config in config.tasks.items():
         if 'data_loaders' in task_config:
-            engine.configure_data_loaders(config.data, task_config.data_loaders, is_distributed, config.seed)
-    
+            engine.configure_data_loaders(
+                config.data, task_config.data_loaders, is_distributed, config.seed, config.is_graph)
+
     # Configure optimizers
     for task, task_config in config.tasks.items():
         if 'optimizers' in task_config:
@@ -127,14 +131,10 @@ def main_worker_function(rank, ngpus_per_node, is_distributed, config):
         if 'scheduler' in task_config:
             engine.configure_scheduler(task_config.scheduler)
 
-    # Configure loss
-    for task, task_config in config.tasks.items():
-        if 'loss' in task_config:
-            engine.configure_loss(task_config.loss)
-
     # Perform tasks
     for task, task_config in config.tasks.items():
         getattr(engine, task)(task_config)
+
 
 if __name__ == '__main__':
     # pylint: disable=no-value-for-parameter
