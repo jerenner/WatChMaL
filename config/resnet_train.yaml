@@ -1,7 +1,6 @@
 gpu_list:
     - 0
 seed: null
-is_graph: False
 dump_path: './outputs/'
 defaults:
     - data: wcte_e_gamma
