@@ -1,0 +1,3 @@
+split_path: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/100k/mu_e_gammac_idxs.npz
+dataset:
+  h5file: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/100k/mu_e_gammac.h5
