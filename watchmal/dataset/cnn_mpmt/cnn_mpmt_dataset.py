@@ -19,14 +19,7 @@ pmts_per_mpmt = 19
 
 
 class CNNmPMTDataset(H5Dataset):
-    """
-    This class loads PMT hit data from an HDF5 file and provides events formatted for CNNs, where the 3D data tensor's
-    first dimension is over the channels, corresponding to hit charge of the 19 PMTs within each mPMT, and the second
-    and third dimensions are the height and width of the CNN image. Each pixel of the image corresponds to one mPMT,
-    with mPMTs arrange in an event-display-like format.
-    """
-
-    def __init__(self, h5file, mpmt_positions_file, padding_type=None, transforms=None, collapse_arrays=False):
+    def __init__(self, h5file, mpmt_positions_file, padding_type=None, transforms=None, collapse_arrays=False, mode=['charge'], collapse_mode=[], scaling=False):
         """
         Constructs a dataset for CNN data. Event hit data is read in from the HDF5 file and the PMT charge data is
         formatted into an event-display-like image for input to a CNN. Each pixel of the image corresponds to one mPMT
@@ -78,7 +71,8 @@ class CNNmPMTDataset(H5Dataset):
         
         ################
 
-    def process_data(self, hit_pmts, hit_data):
+
+    def process_data(self, hit_pmts, hit_data, retrieve=False):
         """
         Returns event data from dataset associated with a specific index
 
@@ -111,7 +105,6 @@ class CNNmPMTDataset(H5Dataset):
         # collapse arrays if desired
         # if self.collapse_arrays:
         #     data = np.expand_dims(np.sum(data, 0), 0)
-        
         return data
 
     def __getitem__(self, item):
@@ -317,27 +310,6 @@ class CNNmPMTDataset(H5Dataset):
         padded_data = torch.cat(concat_order, dim=1)
 
         return padded_data
-
-    def retrieve_event_data(self, item):
-        """
-        Returns event data from dataset associated with a specific index
-        Args:
-            item                    ... index of event
-        Returns:
-            hit_pmts                ... array of ids of hit pmts
-            pmt_charge_data         ... array of charge of hits
-            pmt_time_data           ... array of times of hits
-        """
-        data_dict = super().__getitem__(item)
-
-        # construct charge data with barrel array indexing to match endcaps in xyz ordering
-        pmt_charge_data = self.process_data(self.event_hit_pmts, self.event_hit_charges).flatten()
-
-        # construct time data with barrel array indexing to match endcaps in xyz ordering
-        pmt_time_data = self.process_data(self.event_hit_pmts, self.event_hit_times).flatten()
-
-        return self.event_hit_pmts, pmt_charge_data, pmt_time_data
-    
     
     def feature_scaling_std(self, hit_array, mu, std):
         """

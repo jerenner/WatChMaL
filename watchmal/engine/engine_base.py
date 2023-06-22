@@ -2,36 +2,41 @@
 Class for training a fully supervised classifier
 """
 
+# hydra imports
+from hydra.utils import instantiate
+
 # torch imports
 import torch
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # generic imports
 import numpy as np
 from time import strftime, localtime, time
 
 # WatChMaL imports
-from watchmal.engine.engine_base import BaseEngine
+from watchmal.dataset.data_utils import get_data_loader
+from watchmal.utils.logging_utils import CSVData
 
-class ClassifierEngine:
-    """Engine for performing training or evaluation  for a classification network."""
-    def __init__(self, model, rank, gpu, dump_path, label_set=None):
+from abc import ABC, abstractmethod
+
+class BaseEngine(ABC):
+    def __init__(self, model, rank, gpu, dump_path):
         """
-        Parameters
-        ==========
-        model
-            nn.module object that contains the full network that the engine will use in training or evaluation.
-        rank : int
-            The rank of process among all spawned processes (in multiprocessing mode).
-        gpu : int
-            The gpu that this process is running on.
-        dump_path : string
-            The path to store outputs in.
-        label_set : sequence
-            The set of possible labels to classify (if None, which is the default, then class labels in the data must be
-            0 to N).
+        Args:
+            model       ... model object that engine will use in training or evaluation
+            rank        ... rank of process among all spawned processes (in multiprocessing mode)
+            gpu         ... gpu that this process is running on
+            dump_path   ... path to store outputs in
         """
         # create the directory for saving the log and dump files
-        super().__init__(model, rank, gpu, dump_path)
+        self.epoch = 0
+        self.step = 0
+        self.iteration = 0
+        self.best_validation_loss = 1.0e10
+        self.dirpath = dump_path
+        self.rank = rank
+        self.model = model
+        self.device = torch.device(gpu)
 
         # Setup the parameters to save given the model type
         if isinstance(self.model, DDP):
@@ -43,7 +48,6 @@ class ClassifierEngine:
             self.model_accs = self.model
 
         self.data_loaders = {}
-        self.label_set = label_set
 
         # define the placeholder attributes
         self.data = None
@@ -56,54 +60,59 @@ class ClassifierEngine:
         if self.rank == 0:
             self.val_log = CSVData(self.dirpath + "log_val.csv")
 
-        self.criterion = nn.CrossEntropyLoss()
-        self.softmax = nn.Softmax(dim=1)
-        
+        self.criterion = None
         self.optimizer = None
         self.scheduler = None
-    
+
+    def configure_loss(self, loss_config):
+        self.criterion = instantiate(loss_config)
+
     def configure_optimizers(self, optimizer_config):
-        """Instantiate an optimizer from a hydra config."""
+        """
+        Set up optimizers from optimizer config
+
+        Args:
+            optimizer_config    ... hydra config specifying optimizer object
+        """
         self.optimizer = instantiate(optimizer_config, params=self.model_accs.parameters())
 
+
     def configure_scheduler(self, scheduler_config):
-        """Instantiate a scheduler from a hydra config."""
+        """
+        Set up scheduler from scheduler config
+
+        Args:
+            scheduler_config    ... hydra config specifying scheduler object
+        """
         self.scheduler = instantiate(scheduler_config, optimizer=self.optimizer)
         print('Successfully set up Scheduler')
 
 
     def configure_data_loaders(self, data_config, loaders_config, is_distributed, seed):
         """
-        Set up data loaders from loaders hydra configs for the data config, and a list of data loader configs.
+        Set up data loaders from loaders config
 
         Args:
             data_config     ... hydra config specifying dataset
             loaders_config  ... hydra config specifying dataloaders
             is_distributed  ... boolean indicating if running in multiprocessing mode
             seed            ... seed to use to initialize dataloaders
-            is_graph        ... a boolean indicating whether the dataset is graph or not
         
         Parameters:
             self should have dict attribute data_loaders
         """
         for name, loader_config in loaders_config.items():
             self.data_loaders[name] = get_data_loader(**data_config, **loader_config, is_distributed=is_distributed, seed=seed)
-            if self.label_set is not None:
-                self.data_loaders[name].dataset.map_labels(self.label_set)
     
     def get_synchronized_metrics(self, metric_dict):
         """
-        Gathers metrics from multiple processes using pytorch distributed operations for DistributedDataParallel
+        Gathers metrics from multiple processes using pytorch distributed operations
 
-        Parameters
-        ==========
-        metric_dict : dict of torch.Tensor
-            Dictionary containing values that are tensor outputs of a single process.
+        Args:
+            metric_dict         ... dict containing values that are tensor outputs of a single process
         
-        Returns
-        =======
-        global_metric_dict : dict of torch.Tensor
-            Dictionary containing concatenated list of tensor values gathered from all processes
+        Returns:
+            global_metric_dict  ... dict containing concatenated list of tensor values gathered from all processes
         """
         global_metric_dict = {}
         for name, array in zip(metric_dict.keys(), metric_dict.values()):
@@ -116,57 +125,65 @@ class ClassifierEngine:
 
     def forward(self, train=True):
         """
-        Compute predictions and metrics for a batch of data.
+        Compute predictions and metrics for a batch of data
 
-        Parameters
-        ==========
-        train : bool
-            Whether in training mode, requiring computing gradients for backpropagation
+        Args:
+            train   ... whether to compute gradients for backpropagation
 
-        Returns
-        =======
-        dict
-            Dictionary containing loss, predicted labels, softmax, accuracy, and raw model outputs
+        Parameters:
+            self should have attributes data, labels, model, criterion, softmax
+
+        Returns:
+            dict containing loss, predicted labels, softmax, accuracy, and raw model outputs
         """
-
         with torch.set_grad_enabled(train):
             # Move the data and the labels to the GPU (if using CPU this has no effect)
             data = self.data.to(self.device)
-            labels = self.labels.to(self.device)
-            model_out = self.model(data)
-            softmax = self.softmax(model_out)
-            predicted_labels = torch.argmax(model_out, dim=-1)
-            self.loss = self.criterion(model_out, labels)
-            accuracy = (predicted_labels == labels).sum().item() / float(predicted_labels.nelement())
+            output = self.model(data)
+            self.loss = self.criterion(self.target, output)
 
-            result['loss'] = self.loss.item()
-            result['accuracy'] = accuracy
-        
+        result = {'output': output,
+                  'loss': self.loss}
+
         return result
     
     def backward(self):
-        """Backward pass using the loss computed for a mini-batch"""
+        """
+        Backward pass using the loss computed for a mini-batch
+
+        Parameters:
+            self should have attributes loss, optimizer
+        """
         self.optimizer.zero_grad()  # reset accumulated gradient
-        self.loss.backward()        # compute new gradient
-        self.optimizer.step()       # step params
-    
+        self.loss.backward()  # compute new gradient
+        # nn.utils.clip_grad_norm_(self.model.parameters(), 1) # TODO: check if this is necessary
+        self.optimizer.step()  # step params
+
     # ========================================================================
     # Training and evaluation loops
+
     def train(self, train_config):
         """
-        Train the model on the training set.
+        Train the model on the training set
 
-        Parameters
-        ==========
-        train_config
-            Hydra config specifying training parameters
+        Args:
+            train_config    ... config specigying training parameters
+
+        Parameters:
+            self should have attributes model, data_loaders
+
+        Outputs:
+            val_log      ... csv log containing iteration, epoch, loss, accuracy for each iteration on validation set
+            train_logs   ... csv logs containing iteration, epoch, loss, accuracy for each iteration on training set
+
+        Returns: None
         """
         # initialize training params
-        epochs              = train_config.epochs
-        report_interval     = train_config.report_interval
-        val_interval        = train_config.val_interval
-        num_val_batches     = train_config.num_val_batches
-        checkpointing       = train_config.checkpointing
+        epochs = train_config.epochs
+        report_interval = train_config.report_interval
+        val_interval = train_config.val_interval
+        num_val_batches = train_config.num_val_batches
+        checkpointing = train_config.checkpointing
         save_interval = train_config.save_interval if 'save_interval' in train_config else None
 
         # set the iterations at which to dump the events and their metrics
@@ -190,8 +207,6 @@ class ClassifierEngine:
         for self.epoch in range(epochs):
             if self.rank == 0:
                 print('Epoch', self.epoch+1, 'Starting @', strftime("%Y-%m-%d %H:%M:%S", localtime()))
-            
-            times = []
 
             start_time = time()
             iteration_time = start_time
@@ -202,13 +217,14 @@ class ClassifierEngine:
             if self.is_distributed:
                 train_loader.sampler.set_epoch(self.epoch)
 
-            # local training loop for batches in a single epoch 
+            # local training loop for batches in a single epoch
+            steps_per_epoch = len(train_loader)
             for self.step, train_data in enumerate(train_loader):
-                
+
                 # run validation on given intervals
                 if self.iteration % val_interval == 0:
                     self.validate(val_iter, num_val_batches, checkpointing)
-                
+
                 # Train on batch
                 self.data = train_data['data']
                 self.labels = train_data['labels']
@@ -216,14 +232,14 @@ class ClassifierEngine:
                 # Call forward: make a prediction & measure the average error using data = self.data
                 res = self.forward(True)
 
-                #Call backward: backpropagate error and update weights using loss = self.loss
+                # Call backward: backpropagate error and update weights using loss = self.loss
                 self.backward()
 
                 # update the epoch and iteration
                 # self.epoch += 1. / len(self.data_loaders["train"])
                 self.step += 1
                 self.iteration += 1
-                
+
                 # get relevant attributes of result for logging
                 train_metrics = {"iteration": self.iteration, "epoch": self.epoch, "loss": res["loss"], "accuracy": res["accuracy"]}
                 
@@ -231,37 +247,25 @@ class ClassifierEngine:
                 self.train_log.record(train_metrics)
                 self.train_log.write()
                 self.train_log.flush()
-                
+
                 # print the metrics at given intervals
                 if self.rank == 0 and self.iteration % report_interval == 0:
                     previous_iteration_time = iteration_time
                     iteration_time = time()
                     print("... Iteration %d ... Epoch %d ... Step %d/%d  ... Training Loss %1.3f ... Training Accuracy %1.3f ... Time Elapsed %1.3f ... Iteration Time %1.3f" %
-                          (self.iteration, self.epoch+1, self.step, len(train_loader), res["loss"], res["accuracy"], iteration_time - start_time, iteration_time - previous_iteration_time))
-            
+                          (self.iteration, self.epoch + 1, self.step, steps_per_epoch, res["loss"], res["accuracy"], iteration_time - start_time, iteration_time - previous_iteration_time))
+
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            if (save_interval is not None) and ((self.epoch+1)%save_interval == 0):
-                self.save_state(name=f'_epoch_{self.epoch+1}')   
-      
+            if self.rank == 0 and (save_interval is not None) and ((self.epoch+1)%save_interval == 0):
+                self.save_state(name=f'_epoch_{self.epoch+1}')
+
         self.train_log.close()
         if self.rank == 0:
             self.val_log.close()
 
     def validate(self, val_iter, num_val_batches, checkpointing):
-        """
-        Perform validation with the current state, on a number of batches of the validation set.
-
-        Parameters
-        ----------
-        val_iter : iter
-            Iterator of the validation dataset.
-        num_val_batches : int
-            Number of validation batches to iterate over.
-        checkpointing : bool
-            Whether to save the current state to disk.
-        """
         # set model to eval mode
         self.model.eval()
         val_metrics = {"iteration": self.iteration, "loss": 0., "accuracy": 0., "saved_best": 0}
@@ -321,51 +325,80 @@ class ClassifierEngine:
             self.val_log.flush()
 
     def evaluate(self, test_config):
-        """Evaluate the performance of the trained model on the test set."""
+        """
+        Evaluate the performance of the trained model on the test set
+
+        Args:
+            test_config ... hydra config specifying evaluation parameters
+
+        Parameters:
+            self should have attributes model, data_loaders, dirpath
+
+        Outputs:
+            indices     ... index in dataset of each event
+            labels      ... actual label of each event
+            predictions ... predicted label of each event
+            softmax     ... softmax output over classes for each event
+
+        Returns: None
+        """
         print("evaluating in directory: ", self.dirpath)
 
-        
         # Variables to output at the end
         eval_loss = 0.0
         eval_acc = 0.0
         eval_iterations = 0
-        
+
         # Iterate over the validation set to calculate val_loss and val_acc
         with torch.no_grad():
-            
+
             # Set the model to evaluation mode
             self.model.eval()
-            
-            # Variables for the confusion matrix
-            loss, accuracy, indices, labels, predictions, softmaxes= [],[],[],[],[],[]
-            
+
+            # Variables for the outputs
+            # TODO: find some way of determining the softmax_shape without having to do a forward run
+            self.data = next(iter(self.data_loaders["test"]))['data']
+            self.labels = next(iter(self.data_loaders["test"].dataset))['labels']
+            softmax_shape = self.forward(train=False)['softmax'][0].shape
+            indices = np.zeros((0,))
+            labels = np.zeros((0,))
+            predictions = np.zeros((0,))
+            softmaxes = np.zeros((0, *softmax_shape))
+
+            start_time = time()
+            iteration_time = start_time
+
             # Extract the event data and label from the DataLoader iterator
             steps_per_epoch = len(self.data_loaders["test"])
             for it, eval_data in enumerate(self.data_loaders["test"]):
-                
+
                 # load data
                 self.data = eval_data['data']
                 self.labels = eval_data['labels']
 
                 eval_indices = eval_data['indices']
-                
+
                 # Run the forward procedure and output the result
                 result = self.forward(train=False)
 
                 eval_loss += result['loss']
                 eval_acc  += result['accuracy']
-                
+
                 # Add the local result to the final result
-                indices.extend(eval_indices.numpy())
-                labels.extend(self.labels.numpy())
-                predictions.extend(result['predicted_labels'].detach().cpu().numpy())
-                softmaxes.extend(result["softmax"].detach().cpu().numpy())
-           
-                print("eval_iteration : " + str(it) + " eval_loss : " + str(result["loss"]) + " eval_accuracy : " + str(result["accuracy"]))
-            
+                indices = np.concatenate((indices, eval_indices))
+                labels = np.concatenate((labels, self.labels))
+                predictions = np.concatenate((predictions, result['predicted_labels'].detach().cpu().numpy()))
+                softmaxes = np.concatenate((softmaxes, result['softmax'].detach().cpu().numpy()))
+
                 eval_iterations += 1
-        
-        # convert arrays to torch tensors
+
+                # print the metrics at given intervals
+                if self.rank == 0 and it % test_config.report_interval == 0:
+                    previous_iteration_time = iteration_time
+                    iteration_time = time()
+                    print("... Iteration %d / %d ... Evaluation Loss %1.3f ... Evaluation Accuracy %1.3f ... Time Elapsed %1.3f ... Iteration Time %1.3f" %
+                          (it, steps_per_epoch, result['loss'], result['accuracy'], iteration_time - start_time, iteration_time - previous_iteration_time))
+
         print("loss : " + str(eval_loss/eval_iterations) + " accuracy : " + str(eval_acc/eval_iterations))
 
         iterations = np.array([eval_iterations])
@@ -373,31 +406,22 @@ class ClassifierEngine:
         accuracy = np.array([eval_acc])
 
         local_eval_metrics_dict = {"eval_iterations":iterations, "eval_loss":loss, "eval_acc":accuracy}
-        
+
         indices     = np.array(indices)
         labels      = np.array(labels)
         predictions = np.array(predictions)
         softmaxes   = np.array(softmaxes)
-        
+
         local_eval_results_dict = {"indices":indices, "labels":labels, "predictions":predictions, "softmaxes":softmaxes}
 
         if self.is_distributed:
             # Gather results from all processes
             global_eval_metrics_dict = self.get_synchronized_metrics(local_eval_metrics_dict)
             global_eval_results_dict = self.get_synchronized_metrics(local_eval_results_dict)
-            
+
             if self.rank == 0:
                 for name, tensor in zip(global_eval_metrics_dict.keys(), global_eval_metrics_dict.values()):
                     local_eval_metrics_dict[name] = np.array(tensor.cpu())
-                
-                indices     = np.array(global_eval_results_dict["indices"].cpu())
-                labels      = np.array(global_eval_results_dict["labels"].cpu())
-                predictions = np.array(global_eval_results_dict["predictions"].cpu())
-                softmaxes   = np.array(global_eval_results_dict["softmaxes"].cpu())
-        
-        if self.rank == 0:
-#            print("Sorting Outputs...")
-#            sorted_indices = np.argsort(indices)
 
                 indices     = global_eval_results_dict["indices"].cpu()
                 labels      = global_eval_results_dict["labels"].cpu()
@@ -405,12 +429,13 @@ class ClassifierEngine:
                 softmaxes   = global_eval_results_dict["softmaxes"].cpu()
 
         if self.rank == 0:
+
             # Save overall evaluation results
             print("Saving Data...")
-            np.save(self.dirpath + "indices.npy", indices)#sorted_indices)
-            np.save(self.dirpath + "labels.npy", labels)#[sorted_indices])
-            np.save(self.dirpath + "predictions.npy", predictions)#[sorted_indices])
-            np.save(self.dirpath + "softmax.npy", softmaxes)#[sorted_indices])
+            np.save(self.dirpath + "indices.npy", indices)
+            np.save(self.dirpath + "labels.npy", labels)
+            np.save(self.dirpath + "predictions.npy", predictions)
+            np.save(self.dirpath + "softmax.npy", softmaxes)
 
             # Compute overall evaluation metrics
             val_iterations = np.sum(local_eval_metrics_dict["eval_iterations"])
@@ -425,18 +450,21 @@ class ClassifierEngine:
 
     def save_state(self, name=""):
         """
-        Save model weights and other training state information to a file.
+        Save model weights to a file.
         
-        Parameters
-        ==========
-        name
-            Suffix for the filename. Should be "BEST" for saving the best validation state.
+        Args:
+            name    ... suffix for the filename. Should be "BEST" for saving the best validation state.
         
-        Returns
-        =======
-        filename : string
-            Filename where the saved state is saved.
+        Outputs:
+            dict containing iteration, optimizer state dict, and model state dict
+            
+        Returns: filename
         """
+
+        if self.is_distributed and self.rank != 0:
+            print("Attempted to save state, but not rank 0! NOT saving state!")
+            return
+
         filename = "{}{}{}{}".format(self.dirpath,
                                      str(self.model._get_name()),
                                      name,
@@ -457,7 +485,14 @@ class ClassifierEngine:
         return filename
 
     def restore_best_state(self, placeholder):
-        """Restore model using best model found in current directory."""
+        """
+        Restore model using best model found in current directory
+
+        Args:
+            placeholder     ... extraneous; hydra configs are not allowed to be empty
+
+        Outputs: model params are now those loaded from best model file
+        """
         best_validation_path = "{}{}{}{}".format(self.dirpath,
                                      str(self.model._get_name()),
                                      "BEST",
@@ -466,17 +501,26 @@ class ClassifierEngine:
         self.restore_state_from_file(best_validation_path)
     
     def restore_state(self, restore_config):
-        """Restore model and training state from a file given in the `weight_file` entry of the config."""
         self.restore_state_from_file(restore_config.weight_file)
 
     def restore_state_from_file(self, weight_file):
-        """Restore model and training state from a given filename."""
+        """
+        Restore model using weights stored from a previous run
+        
+        Args: 
+            weight_file     ... path to weights to load
+        
+        Outputs: model params are now those loaded from file
+        """
         # Open a file in read-binary mode
         with open(weight_file, 'rb') as f:
             print('Restoring state from', weight_file)
 
+            # prevent loading while DDP operations are happening
+            if self.is_distributed:
+                torch.distributed.barrier()
             # torch interprets the file, then we can access using string keys
-            checkpoint = torch.load(f)
+            checkpoint = torch.load(f, map_location=self.device)
             
             # load network weights
             self.model_accs.load_state_dict(checkpoint['state_dict'])

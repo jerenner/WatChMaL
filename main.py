@@ -20,9 +20,7 @@ import os
 import numpy as np
 
 from watchmal.utils.logging_utils import get_git_version
-
 logger = logging.getLogger('train')
-
 @hydra.main(config_path='config/', config_name='resnet_wcte_test')
 def main(config):
     """

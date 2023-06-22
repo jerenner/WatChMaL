@@ -18,9 +18,25 @@ from watchmal.dataset.samplers import DistributedSamplerWrapper
 
 # pyg imports
 from torch_geometric.loader import DataLoader as PyGDataLoader
-
-
 def get_data_loader(dataset, batch_size, sampler, num_workers, is_distributed, seed, is_graph=False, split_path=None, split_key=None, transforms=None):
+    """
+    Creates a dataloader given the dataset and sampler configs. The dataset and sampler are instantiated using their
+    corresponding configs. If using DistributedDataParallel, the sampler is wrapped using DistributedSamplerWrapper.
+    A dataloader is returned after being instantiated using this dataset and sampler.
+
+    Args:
+        dataset         ... hydra config specifying dataset object
+        batch_size      ... batch size
+        sampler         ... hydra config specifying sampler object
+        num_workers     ... number of workers to use in dataloading
+        is_distributed  ... whether running in multiprocessing mode, used to wrap sampler using DistributedSamplerWrapper
+        seed            ... seed used to coordinate samplers in distributed mode
+        is_graph        ... a boolean indicating whether the dataset is graph or not
+        split_path      ... path to indices specifying splitting of dataset among train/val/test
+        split_key       ... string key to select indices
+        transforms      ... list of transforms to apply
+    
+    Returns: dataloader created with instantiated dataset and (possibly wrapped) sampler
     """
     Creates a dataloader given the dataset and sampler configs. The dataset and sampler are instantiated using their
     corresponding configs. If using DistributedDataParallel, the sampler is wrapped using DistributedSamplerWrapper.
