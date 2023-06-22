@@ -1,1 +1,1 @@
-weight_file: '/path/to/outputs/ClassifierBEST.pth'
+weight_file: '/mnt/lustre/scratch/nlsas//home/usc/ie/jre/production/outputs/2023-06-04/08-01-45/outputs/DistributedDataParallelBEST.pth'

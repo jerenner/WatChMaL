@@ -1,10 +1,11 @@
 gpu_list:
     - 0
+    - 1
 seed: null
 dump_path: './outputs/'
 defaults:
-    - data: wcte_e_gamma
-    - data/dataset: wcte_cnn_mue
+    - data: wcte_gamma_elec
+    - data/dataset: wcte_cnn
     - model: classifier
     - model/feature_extractor: resnet18
     - model/classification_network: resnet

@@ -65,6 +65,19 @@ class CNNmPMTDataset(H5Dataset):
         self.horizontal_flip_mpmt_map = [0, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 12, 17, 16, 15, 14, 13, 18]
         self.vertical_flip_mpmt_map = [6, 5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 15, 14, 13, 12, 17, 16, 18]
 
+        self.mode = mode
+        self.collapse_mode = collapse_mode
+        self.scaling = scaling
+
+        ################
+        
+        self.mu_q = 2.634658   #np.mean(train_events)
+        self.mu_t = 1115.6687   #np.mean(train_events)
+        self.std_q = 6.9462004  #np.std(train_events)
+        self.std_t = 263.4307  #np.std(train_events)
+        
+        ################
+
     def process_data(self, hit_pmts, hit_data):
         """
         Returns event data from dataset associated with a specific index
@@ -81,6 +94,7 @@ class CNNmPMTDataset(H5Dataset):
         data: ndarray
             Array in image-like format (channels, rows, columns) for input to CNN network.
         """
+
         hit_mpmts = hit_pmts // pmts_per_mpmt
         hit_pmt_in_modules = hit_pmts % pmts_per_mpmt
 
@@ -95,8 +109,8 @@ class CNNmPMTDataset(H5Dataset):
         data[:, self.barrel_rows, :] = barrel_data[barrel_map_array_idxs, :, :]
 
         # collapse arrays if desired
-        if self.collapse_arrays:
-            data = np.expand_dims(np.sum(data, 0), 0)
+        # if self.collapse_arrays:
+        #     data = np.expand_dims(np.sum(data, 0), 0)
         
         return data
 
@@ -104,14 +118,50 @@ class CNNmPMTDataset(H5Dataset):
 
         data_dict = super().__getitem__(item)
 
-        processed_data = from_numpy(self.process_data(self.event_hit_pmts, self.event_hit_charges))
+        # select random choices for transformations for charge and time
+        rand_choices = []
+        if self.transforms is not None:
+            rand_choices = [bool(random.getrandbits(1)) for i in range(len(self.transforms))]
         
-        processed_data = du.apply_random_transformations(self.transforms, processed_data)
+        if 'charge' in self.mode:
+            hit_data = self.event_hit_charges
+            if self.scaling:
+                hit_data = self.feature_scaling_std(hit_data, self.mu_q, self.std_q)
+            
+            charge_image = from_numpy(self.process_data(self.event_hit_pmts, hit_data))
+            charge_image = du.apply_random_transformations_fixedchoices(self.transforms, charge_image, rand_choices)
+            charge_image = self.padding_type(charge_image)
 
-        if self.padding_type is not None:
-            processed_data = self.padding_type(processed_data)
+            if 'charge' in self.collapse_mode:
+                mean_channel = torch.mean(charge_image, 0, keepdim=True)
+                std_channel = torch.std(charge_image, 0, keepdim=True)
+                charge_image = torch.cat((mean_channel, std_channel), 0)
+        
+        if 'time' in self.mode:
+            hit_data = self.event_hit_times
+            if self.scaling:
+                hit_data = self.feature_scaling_std(hit_data, self.mu_t, self.std_t)
 
-        data_dict["data"] = processed_data
+            time_image = from_numpy(self.process_data(self.event_hit_pmts, hit_data))
+            time_image = du.apply_random_transformations_fixedchoices(self.transforms, time_image, rand_choices)
+            time_image = self.padding_type(time_image)
+
+            if 'time' in self.collapse_mode:
+                mean_channel = torch.mean(time_image, 0, keepdim=True)
+                std_channel = torch.std(time_image, 0, keepdim=True)
+                time_image = torch.cat((mean_channel, std_channel), 0)
+
+        
+        # Merge all channels
+        if ('time' in self.mode) and ('charge' in self.mode):
+            processed_image = torch.cat((charge_image, time_image), 0)
+        elif 'charge' in self.mode:
+            processed_image = charge_image
+        else:
+            processed_image = time_image
+
+        
+        data_dict["data"] = processed_image
         
         return data_dict
         
@@ -267,3 +317,31 @@ class CNNmPMTDataset(H5Dataset):
         padded_data = torch.cat(concat_order, dim=1)
 
         return padded_data
+
+    def retrieve_event_data(self, item):
+        """
+        Returns event data from dataset associated with a specific index
+        Args:
+            item                    ... index of event
+        Returns:
+            hit_pmts                ... array of ids of hit pmts
+            pmt_charge_data         ... array of charge of hits
+            pmt_time_data           ... array of times of hits
+        """
+        data_dict = super().__getitem__(item)
+
+        # construct charge data with barrel array indexing to match endcaps in xyz ordering
+        pmt_charge_data = self.process_data(self.event_hit_pmts, self.event_hit_charges).flatten()
+
+        # construct time data with barrel array indexing to match endcaps in xyz ordering
+        pmt_time_data = self.process_data(self.event_hit_pmts, self.event_hit_times).flatten()
+
+        return self.event_hit_pmts, pmt_charge_data, pmt_time_data
+    
+    
+    def feature_scaling_std(self, hit_array, mu, std):
+        """
+            Scale data using standarization.
+        """
+        standarized_array = (hit_array - mu)/std
+        return standarized_array
