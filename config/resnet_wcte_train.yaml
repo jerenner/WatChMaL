@@ -1,10 +1,11 @@
 gpu_list:
     - 0
+    - 1
 seed: null
 dump_path: './outputs/'
 defaults:
-    - data: wcte_mue
-    - data/dataset: wcte_cnn_mue
+    - data: wcte_gamma_elec
+    - data/dataset: wcte_cnn
     - model: classifier
     - model/feature_extractor: resnet18
     - model/classification_network: resnet
@@ -14,5 +15,6 @@ defaults:
     - sampler@tasks.train.data_loaders.train.sampler: subset_random
     - sampler@tasks.train.data_loaders.validation.sampler: subset_random
     - tasks/restore_best_state: restore_best_state
+    - tasks/evaluate: test
     - sampler@tasks.evaluate.data_loaders.test.sampler: subset_sequential
     - _self_

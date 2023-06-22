@@ -3,13 +3,13 @@ gpu_list:
 seed: null
 dump_path: './outputs/'
 defaults:
-    - data: wcte_e_gamma
-    - data/dataset: wcte_cnn_mue
+    - data: wcte_mue
+    - data/dataset: wcte_pointnet_mue
     - model: classifier
-    - model/feature_extractor: resnet18
-    - model/classification_network: resnet
+    - model/feature_extractor: pointnet
+    - model/classification_network: pointnet_fc
     - engine: classifier
-    - tasks/train: train_resnet
+    - tasks/train: train_pointnet
     - optimizers@tasks.train.optimizers: adam
     - sampler@tasks.train.data_loaders.train.sampler: subset_random
     - sampler@tasks.train.data_loaders.validation.sampler: subset_random
