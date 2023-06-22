@@ -1,4 +1,7 @@
 _target_: watchmal.dataset.cnn_mpmt.cnn_mpmt_dataset.CNNmPMTDataset
 mpmt_positions_file: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/NuPRISMBeamTest_16cShort_mPMT_positions.npz
-collapse_arrays: False
 padding_type: double_cover
+mode: ['charge', 'time'] # With this configuration: 38 channels (19 for charge + 19 for time)
+#mode: ['charge']
+collapse_arrays: False
+#padding_type: mpmtPadding

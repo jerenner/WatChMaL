@@ -1,3 +1,3 @@
-split_path: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/100k/gamma_elec_idxs.npz
+split_path: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/100k/gamma_elec_muminus_piminus_idxs.npz
 dataset:
   h5file: /mnt/lustre/scratch/nlsas/home/usc/ie/jre/production/100k/gamma_elec_miminus_piminus.h5
