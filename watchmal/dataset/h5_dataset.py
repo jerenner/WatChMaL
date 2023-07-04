@@ -58,7 +58,7 @@ class H5CommonDataset(Dataset, ABC):
 #        self.root_files = np.array(self.h5_file["root_files"])
         self.labels = np.array(self.h5_file["labels"])
 
-#        self.positions  = np.array(self.h5_file["positions"])
+        self.positions  = np.array(self.h5_file["positions"])
 #        self.angles     = np.array(self.h5_file["angles"])
 #        self.energies   = np.array(self.h5_file["energies"])
 #        if "veto" in self.h5_file.keys():
@@ -120,7 +120,7 @@ class H5CommonDataset(Dataset, ABC):
             "labels": self.labels[item].astype(np.int64),
             # "energies": self.energies[item],
             # "angles": self.angles[item],
-            # "positions": self.positions[item],
+            "positions": self.positions[item],
             # "event_ids": self.event_ids[item],
             # "root_files": self.root_files[item],
             "indices": item

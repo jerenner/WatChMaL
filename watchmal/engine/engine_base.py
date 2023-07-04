@@ -65,6 +65,7 @@ class BaseEngine(ABC):
         self.scheduler = None
 
     def configure_loss(self, loss_config):
+        print("CALLING CONFIGURE LOSS")
         self.criterion = instantiate(loss_config)
 
     def configure_optimizers(self, optimizer_config):

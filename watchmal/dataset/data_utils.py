@@ -38,39 +38,6 @@ def get_data_loader(dataset, batch_size, sampler, num_workers, is_distributed, s
     
     Returns: dataloader created with instantiated dataset and (possibly wrapped) sampler
     """
-    Creates a dataloader given the dataset and sampler configs. The dataset and sampler are instantiated using their
-    corresponding configs. If using DistributedDataParallel, the sampler is wrapped using DistributedSamplerWrapper.
-    A dataloader is returned after being instantiated using this dataset and sampler.
-
-
-    Parameters
-    ----------
-    dataset
-        Hydra config specifying dataset object.
-    batch_size : int
-        Size of the batches that the data loader should return.
-    sampler
-        Hydra config specifying sampler object.
-    num_workers : int
-        Number of data loader worker processes to use.
-    is_distributed : bool
-        Whether running in multiprocessing mode (i.e. DistributedDataParallel)
-    seed : int
-        Random seed used to coordinate samplers in distributed mode.
-    is_graph : bool
-        A boolean indicating whether the dataset is graph or not, to use PyTorch Geometric data loader if it is graph. False by default.
-    split_path
-        Path to an npz file containing an array of indices to use as a subset of the full dataset.
-    split_key : string
-        Name of the array to use in the file specified by split_path.
-    transforms : list of string
-        List of transforms to apply to the dataset.
-    
-    Returns
-    -------
-    torch.utils.data.DataLoader
-        dataloader created with instantiated dataset and (possibly wrapped) sampler
-    """
     dataset = instantiate(dataset, transforms=transforms)
     
     if split_path is not None and split_key is not None:
@@ -141,4 +108,13 @@ def apply_random_transformations(transforms, data, segmented_labels=None):
                 data = transformation(data)
                 if segmented_labels is not None:
                     segmented_labels = transformation(segmented_labels)
+    return data
+
+def apply_random_transformations_fixedchoices(transforms, data, random_choices, segmented_labels = None):
+    if transforms is not None:
+        for transformation, choice in zip(transforms, random_choices):
+            if choice:
+                data = transformation(data)
+            if segmented_labels is not None:
+                segmented_labels = transformation(segmented_labels)
     return data

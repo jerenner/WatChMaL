@@ -21,7 +21,7 @@ import numpy as np
 
 from watchmal.utils.logging_utils import get_git_version
 logger = logging.getLogger('train')
-@hydra.main(config_path='config/', config_name='resnet_wcte_test')
+@hydra.main(config_path='config/', config_name='reg_wcte_test')
 def main(config):
     """
     Run model using given config, spawn worker subprocesses as necessary
@@ -124,7 +124,12 @@ def main_worker_function(rank, ngpus_per_node, is_distributed, config):
     for task, task_config in config.tasks.items():
         if 'scheduler' in task_config:
             engine.configure_scheduler(task_config.scheduler)
-    
+ 
+    # Configure loss
+    for task, task_config in config.tasks.items():
+        if 'loss' in task_config:
+            engine.configure_loss(task_config.loss)
+
     # Perform tasks
     for task, task_config in config.tasks.items():
         getattr(engine, task)(task_config)

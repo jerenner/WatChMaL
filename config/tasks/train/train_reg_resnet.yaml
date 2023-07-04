@@ -1,4 +1,4 @@
-epochs: 20
+epochs: 300
 
 report_interval: 100
 val_interval: 100
